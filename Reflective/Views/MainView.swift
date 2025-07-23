@@ -14,23 +14,28 @@ class LogViewModel: ObservableObject {
     }
     
     func loadLogIfNeeded() {
+        print("loadLogIfNeeded called with ID: \(String(describing: currentLogId))")
         guard let id = currentLogId,
               let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first else {
+            print("No log found or ID is nil")
             return
         }
+        print("Log found, updating text")
         text = log.content ?? ""
         isEditing = false
     }
     
     func saveLog() {
+        print("Saving log")
         if let id = currentLogId,
            let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first {
-            // Update existing log
+            print("Updating existing log: \(id)")
             log.update(content: text, in: dataController.container.viewContext)
         } else {
-            // Create new log
+            print("Creating new log")
             let newLog = Log.create(content: text, in: dataController.container.viewContext)
             currentLogId = newLog.id
+            print("New log created with ID: \(String(describing: newLog.id))")
         }
         isEditing = false
     }
@@ -44,7 +49,7 @@ class LogViewModel: ObservableObject {
 
 struct MainView: View {
     @EnvironmentObject var windowController: WindowStateController
-    @StateObject private var viewModel: LogViewModel
+    @StateObject var viewModel: LogViewModel
     @Environment(\.colorScheme) var colorScheme
     
     init(dataController: DataController) {
@@ -116,7 +121,13 @@ struct MainView: View {
             }
         }
         .onAppear {
-            windowController.registerView(self, for: .main)
+            if let logId = windowController.currentLogId {
+                viewModel.currentLogId = logId
+                viewModel.loadLogIfNeeded()
+            }
+        }
+        .onChange(of: windowController.currentLogId) { oldValue, newValue in
+            viewModel.currentLogId = newValue
             viewModel.loadLogIfNeeded()
         }
     }

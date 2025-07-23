@@ -40,31 +40,12 @@ struct ArchiveView: View {
                 EmptyView()
             } primaryAction: { items in
                 if let selectedId = items.first {
-                    windowController.switchWindow(to: .main)
+                    windowController.switchToMainView(withLogId: selectedId!)
                 }
             }
-            // .onTableDoubleClick(selection: $selection) { logId in
-            //     // NOTE: still not being called
-            //     print("Double click detected with row: \(String(describing: logId))")
-            //     if let logId = logId {
-            //         print("Switching to main view...")
-            //         // Switch to main view first
-            //         windowController.switchWindow(to: .main)
-                    
-            //         print("Looking for MainView...")
-            //         // Then find the MainView and load the log
-            //         if let mainView = windowController.view(for: .main) as? MainView {
-            //             print("Found MainView, loading log...")
-            //             mainView.loadLog(id: logId)
-            //         } else {
-            //             print("MainView not found!")
-            //         }
-            //     }
-            // }
         }
         .onAppear {
-            // Fetch logs when view appears
-            logs = dataController.fetchData(Log.self)
+            logs = dataController.fetchData(Log.self, predicate: Log.allLogs.predicate)
         }
     }
 }

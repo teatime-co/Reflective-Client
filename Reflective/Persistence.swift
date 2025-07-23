@@ -23,8 +23,7 @@ class WindowStateController: ObservableObject {
     
     // Window-specific state
     @Published var activeWindow: WindowType = .main
-    @Published var windowSettings: [String: Any] = [:]
-    private var viewReferences: [WindowType: Any] = [:]
+    @Published var currentLogId: UUID?
     
     init(container: NSPersistentContainer) {
         self.container = container
@@ -36,14 +35,21 @@ class WindowStateController: ObservableObject {
         print("Active window is now: \(activeWindow.rawValue)")
     }
     
+    func switchToMainView(withLogId logId: UUID) {
+        print("Starting switchToMainView: \(logId)")
+        currentLogId = logId
+        switchWindow(to: .main)
+    }
+    
     func registerView(_ view: Any, for type: WindowType) {
         print("Registering view for \(type.rawValue)")
-        viewReferences[type] = view
+        // This function is no longer needed as view instances are managed by the MainView itself
     }
     
     func view(for type: WindowType) -> Any? {
         print("Fetching view for \(type.rawValue)")
-        return viewReferences[type]
+        // This function is no longer needed as view instances are managed by the MainView itself
+        return nil
     }
 }
 

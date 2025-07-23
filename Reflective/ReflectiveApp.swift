@@ -30,9 +30,9 @@ struct ReflectiveApp: App {
                                 forKey: NSPersistentHistoryTrackingKey)
         }
 
-        // share the same container between controllers
-        windowController = WindowStateController(container: container)
+        // Create controllers in correct order
         dataController = DataController(container: container)
+        windowController = WindowStateController(container: container, dataController: dataController)
     }
     
     var body: some Scene {

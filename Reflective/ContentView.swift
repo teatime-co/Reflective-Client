@@ -37,7 +37,9 @@ struct ContentView: View {
             // Content based on active window
             switch windowController.activeWindow {
             case .main:
-                MainView(dataController: dataController)
+                if let mainView = windowController.view(for: .main) as? MainView {
+                    mainView
+                }
             case .retro:
                 RetroView()
             case .archive:
