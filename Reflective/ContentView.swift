@@ -8,8 +8,10 @@
 import SwiftUI
 
 struct ContentView: View {
+
     @EnvironmentObject var windowController: WindowStateController
     @EnvironmentObject var dataController: DataController
+    @Environment(\.managedObjectContext) var viewContext
 
     var body: some View {
         VStack {
@@ -31,15 +33,19 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(windowController.activeWindow == .archive ? .accentColor : .secondary)
+                
+                Button(action: { windowController.switchWindow(to: .progress) }) {
+                    Label("Progress", systemImage: "chart.bar.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(windowController.activeWindow == .progress ? .accentColor : .secondary)
             }
             .padding()
             
             // Content based on active window
             switch windowController.activeWindow {
             case .main:
-                if let mainView = windowController.view(for: .main) as? MainView {
-                    mainView
-                }
+                MainView(dataController: dataController)
             case .retro:
                 RetroView()
             case .archive:
@@ -54,7 +60,9 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
-        .environmentObject(WindowStateController(container: NSPersistentContainer(name: "Reflective")))
-        .environmentObject(DataController(container: NSPersistentContainer(name: "Reflective")))
+    let container = NSPersistentContainer(name: "Reflective")
+    return ContentView()
+        .environmentObject(WindowStateController(container: container))
+        .environmentObject(DataController(container: container))
+        .environment(\.managedObjectContext, container.viewContext)
 }

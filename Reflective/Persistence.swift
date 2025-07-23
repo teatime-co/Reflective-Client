@@ -90,6 +90,9 @@ class DataController: ObservableObject {
     init(container: NSPersistentContainer) {
         self.container = container
         
+        // Configure autosave
+        configureAutosave()
+        
         #if DEBUG
         // Add observer for Core Data debug notifications
         NotificationCenter.default.addObserver(
@@ -99,6 +102,67 @@ class DataController: ObservableObject {
             object: container.viewContext
         )
         #endif
+        
+        // Register for app termination notification
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(saveOnTerminate),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
+        
+        // Register for app resign active notification
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(saveOnResignActive),
+            name: NSApplication.willResignActiveNotification,
+            object: nil
+        )
+        
+        // Register for context did save notification
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(contextDidSave),
+            name: .NSManagedObjectContextDidSave,
+            object: nil
+        )
+    }
+    
+    private func configureAutosave() {
+        // Configure context to automatically merge changes
+        container.viewContext.automaticallyMergesChangesFromParent = true
+        
+        // Configure context to merge policy
+        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        
+        // Set up autosave timer
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if self.container.viewContext.hasChanges {
+                self.logger.debug("Autosaving changes")
+                self.saveData()
+            }
+        }
+    }
+    
+    @objc private func saveOnTerminate() {
+        logger.debug("Application terminating, saving context")
+        saveData()
+    }
+    
+    @objc private func saveOnResignActive() {
+        logger.debug("Application resigning active, saving context")
+        saveData()
+    }
+    
+    @objc private func contextDidSave(_ notification: Notification) {
+        // Only process notifications from other contexts
+        if notification.object as? NSManagedObjectContext != container.viewContext {
+            logger.debug("Background context saved, merging changes to main context")
+            container.viewContext.perform {
+                self.container.viewContext.mergeChanges(fromContextDidSave: notification)
+            }
+        }
     }
     
     #if DEBUG

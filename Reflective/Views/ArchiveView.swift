@@ -18,6 +18,17 @@ struct ArchiveView: View {
                     Text(log.createdAt?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown")
                 }
                 .width(150)
+                
+                TableColumn("Tags") { log in
+                    if !log.tags.isEmpty {
+                        TagsView(tags: log.tags, fontSize: .caption2, showHash: true)
+                    } else {
+                        Text("No tags")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .width(200)
                
                 TableColumn("Content") { log in
                     Text(log.content ?? "")
@@ -32,6 +43,7 @@ struct ArchiveView: View {
                     print("- Content: \(selectedLog.content ?? "No content")")
                     print("- Created At: \(selectedLog.createdAt?.formatted() ?? "Unknown")")
                     print("- Updated At: \(selectedLog.updatedAt?.formatted() ?? "Unknown")")
+                    print("- Tags: \(selectedLog.tags.map { $0.wrappedName }.joined(separator: ", "))")
                 } else {
                     print("No log selected or log not found")
                 }

@@ -7,7 +7,9 @@ class LogViewModel: ObservableObject {
     
     @Published var currentLogId: UUID?
     @Published var text: String = ""
+    @Published var displayText: String = ""
     @Published var isEditing: Bool = false
+    @Published var tags: [Tag] = []
     
     init(dataController: DataController) {
         self.dataController = dataController
@@ -22,6 +24,8 @@ class LogViewModel: ObservableObject {
         }
         print("Log found, updating text")
         text = log.content ?? ""
+        displayText = log.displayContent()
+        tags = log.tags
         isEditing = false
     }
     
@@ -31,10 +35,14 @@ class LogViewModel: ObservableObject {
            let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first {
             print("Updating existing log: \(id)")
             log.update(content: text, in: dataController.container.viewContext)
+            tags = log.tags // Update tags after saving
+            displayText = log.displayContent() // Update display text
         } else {
             print("Creating new log")
             let newLog = Log.create(content: text, in: dataController.container.viewContext)
             currentLogId = newLog.id
+            tags = newLog.tags // Update tags after saving
+            displayText = newLog.displayContent() // Update display text
             print("New log created with ID: \(String(describing: newLog.id))")
         }
         isEditing = false
@@ -43,6 +51,8 @@ class LogViewModel: ObservableObject {
     func createNewEntry() {
         currentLogId = nil
         text = ""
+        displayText = ""
+        tags = []
         isEditing = true
     }
 }
@@ -58,6 +68,12 @@ struct MainView: View {
     
     var body: some View {
         VStack(spacing: 0) {
+            // Tags display
+            if !viewModel.isEditing && !viewModel.tags.isEmpty {
+                TagsView(tags: viewModel.tags, fontSize: .caption2)
+                    .frame(height: 40)
+            }
+            
             if viewModel.isEditing {
                 TextEditor(text: $viewModel.text)
                     .scrollContentBackground(.hidden)
@@ -80,7 +96,7 @@ struct MainView: View {
                     )
             } else {
                 ScrollView {
-                    Text(viewModel.text)
+                    Text(viewModel.displayText)
                         .font(.body)
                         .padding(.horizontal, 20)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -88,7 +104,7 @@ struct MainView: View {
             }
             
             HStack {
-                if viewModel.currentLogId != nil {
+                if viewModel.currentLogId != nil && !viewModel.isEditing {
                     Button(action: viewModel.createNewEntry) {
                         Text("New Entry")
                             .frame(maxWidth: .infinity)
