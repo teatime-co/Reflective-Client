@@ -92,9 +92,14 @@ struct MainView: View {
     @EnvironmentObject var windowController: WindowStateController
     @StateObject var viewModel: LogViewModel
     @Environment(\.colorScheme) var colorScheme
+    @State private var savingDotsState = 0
     
     init(dataController: DataController) {
         _viewModel = StateObject(wrappedValue: LogViewModel(dataController: dataController))
+    }
+    
+    private var savingText: String {
+        "Saving" + String(repeating: ".", count: savingDotsState + 1)
     }
     
     var body: some View {
@@ -163,28 +168,40 @@ struct MainView: View {
                     .tint(.secondary)
                 }
                 
-                Button(action: {
-                    if !viewModel.isEditing {
-                        viewModel.isEditing = true
-                        viewModel.clearError()
-                    } else {
-                        Task {
-                            await viewModel.saveLog()
+                if viewModel.isSaving {
+                    Text(savingText)
+                        .foregroundStyle(.secondary)
+                        .onAppear {
+                            // Start the timer when saving begins
+                            let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+                                savingDotsState = (savingDotsState + 1) % 3
+                                // Stop the timer when saving is complete
+                                if !viewModel.isSaving {
+                                    timer.invalidate()
+                                    savingDotsState = 0
+                                }
+                            }
+                            // Make sure the timer stops if the view disappears
+                            RunLoop.current.add(timer, forMode: .common)
                         }
-                    }
-                }) {
-                    if viewModel.isSaving {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                    } else {
+                } else {
+                    Button(action: {
+                        if !viewModel.isEditing {
+                            viewModel.isEditing = true
+                            viewModel.clearError()
+                        } else {
+                            Task {
+                                await viewModel.saveLog()
+                            }
+                        }
+                    }) {
                         Label(viewModel.isEditing ? "Save" : "Edit", 
                               systemImage: viewModel.isEditing ? "checkmark" : "pencil")
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.accentColor)
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.accentColor)
-                .disabled(viewModel.isSaving)
-                .keyboardShortcut(.return, modifiers: .command)
             }
             .padding()
         }

@@ -14,11 +14,21 @@ class APIClient {
     // Development flag to bypass backend sync
     static var bypassBackendSync = false
     
-    // ISO8601/RFC3339 date formatter
-    private let dateFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
+    // Configured JSON decoder/encoder for dates
+    private let jsonDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        decoder.dateDecodingStrategy = .formatted(formatter)
+        return decoder
+    }()
+    
+    private let jsonEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        encoder.dateEncodingStrategy = .formatted(formatter)
+        return encoder
     }()
     
     private init() {
@@ -38,11 +48,18 @@ class APIClient {
     }
     
     // MARK: - Log Endpoints
-    func createLog(_ log: Log) async throws {
+    func createLog(_ log: Log) async throws -> LogPayload {
         // Skip backend sync if bypass is enabled
         if APIClient.bypassBackendSync {
             print("[DEV] Bypassing backend sync for createLog")
-            return
+            return LogPayload(
+                id: log.wrappedId,
+                content: log.wrappedContent,
+                createdAt: log.wrappedCreatedAt,
+                updatedAt: log.wrappedUpdatedAt,
+                wordCount: log.wordCount,
+                processingStatus: log.processingStatus ?? "pending"
+            )
         }
         
         let url = URL(string: "\(baseURL)/logs")!
@@ -53,7 +70,7 @@ class APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let payload = LogPayload(
-            id: log.wrappedId,
+            id: log.wrappedId,  // Send client-generated ID to server
             content: log.wrappedContent,
             createdAt: log.wrappedCreatedAt,
             updatedAt: log.wrappedUpdatedAt,
@@ -62,7 +79,7 @@ class APIClient {
         )
         
         do {
-            let jsonData = try JSONEncoder().encode(payload)
+            let jsonData = try jsonEncoder.encode(payload)
             request.httpBody = jsonData
             print("[DEBUG] Request payload: \(String(data: jsonData, encoding: .utf8) ?? "")")
         } catch {
@@ -80,6 +97,10 @@ class APIClient {
                 print("[ERROR] Invalid response: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
                 throw APIError.invalidResponse
             }
+            
+            // Decode and return the server response
+            let serverLog = try jsonDecoder.decode(LogPayload.self, from: data)
+            return serverLog
         } catch {
             print("[ERROR] Network request failed: \(error)")
             throw APIError.networkError(error)
@@ -107,7 +128,7 @@ class APIClient {
             processingStatus: log.processingStatus ?? "pending"
         )
         
-        request.httpBody = try JSONEncoder().encode(payload)
+        request.httpBody = try jsonEncoder.encode(payload)
         
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
@@ -149,7 +170,7 @@ class APIClient {
             throw APIError.invalidResponse
         }
         
-        return try JSONDecoder().decode([LogPayload].self, from: data)
+        return try jsonDecoder.decode([LogPayload].self, from: data)
     }
     
     // MARK: - Tag Endpoints
@@ -172,7 +193,7 @@ class APIClient {
             createdAt: tag.wrappedCreatedAt
         )
         
-        request.httpBody = try JSONEncoder().encode(payload)
+        request.httpBody = try jsonEncoder.encode(payload)
         
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
@@ -196,7 +217,7 @@ class APIClient {
             throw APIError.invalidResponse
         }
         
-        return try JSONDecoder().decode([TagPayload].self, from: data)
+        return try jsonDecoder.decode([TagPayload].self, from: data)
     }
     
     // MARK: - Query Endpoints
@@ -213,7 +234,7 @@ class APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let payload = ["query": query]
-        request.httpBody = try JSONEncoder().encode(payload)
+        request.httpBody = try jsonEncoder.encode(payload)
         
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
@@ -221,13 +242,13 @@ class APIClient {
             throw APIError.invalidResponse
         }
         
-        return try JSONDecoder().decode(SearchResponse.self, from: data)
+        return try jsonDecoder.decode(SearchResponse.self, from: data)
     }
 }
 
 // MARK: - API Models
 struct LogPayload: Codable {
-    let id: UUID
+    let id: UUID  // Required field now
     let content: String
     let createdAt: Date
     let updatedAt: Date
@@ -247,8 +268,15 @@ struct LogPayload: Codable {
 struct TagPayload: Codable {
     let id: UUID
     let name: String
-    let color: String
+    let color: String?
     let createdAt: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case color
+        case createdAt = "created_at"
+    }
 }
 
 struct SearchResponse: Codable {
