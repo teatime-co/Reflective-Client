@@ -3,23 +3,35 @@
     <entity name="Log" representedClassName="Log" syncable="YES" codeGenerationType="class">
         <attribute name="content" attributeType="String" allowsExternalBinaryDataStorage="YES"/>
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
-        <attribute name="embedding" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
-        <attribute name="embeddingVersion" optional="YES" attributeType="String"/>
         <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="processingStatus" optional="YES" attributeType="String"/>
         <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="wordCount" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="queryResults" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="QueryResult" inverseName="log" inverseEntity="QueryResult"/>
         <relationship name="tagLog" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="TagLog" inverseName="log" inverseEntity="TagLog"/>
+        <fetchIndex name="byId">
+            <fetchIndexElement property="id" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byCreatedAt">
+            <fetchIndexElement property="createdAt" type="Binary" order="descending"/>
+        </fetchIndex>
+        <fetchIndex name="byProcessingStatus">
+            <fetchIndexElement property="processingStatus" type="Binary" order="ascending"/>
+        </fetchIndex>
     </entity>
     <entity name="Query" representedClassName="Query" syncable="YES" codeGenerationType="class">
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
-        <attribute name="embedding" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
         <attribute name="executionTime" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
         <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="queryText" attributeType="String"/>
         <attribute name="resultCount" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="results" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="QueryResult" inverseName="query" inverseEntity="QueryResult"/>
+        <fetchIndex name="byId">
+            <fetchIndexElement property="id" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byCreatedAt">
+            <fetchIndexElement property="createdAt" type="Binary" order="descending"/>
+        </fetchIndex>
     </entity>
     <entity name="QueryResult" representedClassName="QueryResult" syncable="YES" codeGenerationType="class">
         <attribute name="contextAfter" optional="YES" attributeType="String"/>
@@ -32,6 +44,15 @@
         <attribute name="snippetText" attributeType="String"/>
         <relationship name="log" maxCount="1" deletionRule="Nullify" destinationEntity="Log" inverseName="queryResults" inverseEntity="Log"/>
         <relationship name="query" maxCount="1" deletionRule="Nullify" destinationEntity="Query" inverseName="results" inverseEntity="Query"/>
+        <fetchIndex name="byId">
+            <fetchIndexElement property="id" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byRelevanceScore">
+            <fetchIndexElement property="relevanceScore" type="Binary" order="descending"/>
+        </fetchIndex>
+        <fetchIndex name="byRank">
+            <fetchIndexElement property="rank" type="Binary" order="ascending"/>
+        </fetchIndex>
     </entity>
     <entity name="Tag" representedClassName="Tag" syncable="YES" codeGenerationType="class">
         <attribute name="color" optional="YES" attributeType="String"/>
@@ -39,6 +60,12 @@
         <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" attributeType="String"/>
         <relationship name="tagLog" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="TagLog" inverseName="tag" inverseEntity="TagLog"/>
+        <fetchIndex name="byId">
+            <fetchIndexElement property="id" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byName">
+            <fetchIndexElement property="name" type="Binary" order="ascending"/>
+        </fetchIndex>
     </entity>
     <entity name="TagLog" representedClassName="TagLog" syncable="YES" codeGenerationType="class">
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>

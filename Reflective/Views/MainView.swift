@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import CoreData
 
+@MainActor
 class LogViewModel: ObservableObject {
     private let dataController: DataController
     
@@ -10,6 +11,8 @@ class LogViewModel: ObservableObject {
     @Published var displayText: String = ""
     @Published var isEditing: Bool = false
     @Published var tags: [Tag] = []
+    @Published var saveError: String?
+    @Published var isSaving: Bool = false
     
     init(dataController: DataController) {
         self.dataController = dataController
@@ -27,25 +30,48 @@ class LogViewModel: ObservableObject {
         displayText = log.displayContent()
         tags = log.tags
         isEditing = false
+        saveError = nil
     }
     
-    func saveLog() {
+    func saveLog() async {
         print("Saving log")
-        if let id = currentLogId,
-           let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first {
-            print("Updating existing log: \(id)")
-            log.update(content: text, in: dataController.container.viewContext)
-            tags = log.tags // Update tags after saving
-            displayText = log.displayContent() // Update display text
-        } else {
-            print("Creating new log")
-            let newLog = Log.create(content: text, in: dataController.container.viewContext)
-            currentLogId = newLog.id
-            tags = newLog.tags // Update tags after saving
-            displayText = newLog.displayContent() // Update display text
-            print("New log created with ID: \(String(describing: newLog.id))")
+        saveError = nil
+        isSaving = true
+        defer { isSaving = false }
+        
+        do {
+            if let id = currentLogId,
+               let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first {
+                print("Updating existing log: \(id)")
+                
+                let success = try await log.update(content: text, in: dataController.container.viewContext)
+                if success {
+                    tags = log.tags // Update tags after successful save
+                    displayText = log.displayContent() // Update display text
+                    print("Successfully updated log with \(tags.count) tags")
+                    isEditing = false
+                } else {
+                    saveError = "Failed to update log. Please try again."
+                    print("Failed to update log")
+                }
+            } else {
+                print("Creating new log")
+                
+                if let newLog = try await Log.create(content: text, in: dataController.container.viewContext) {
+                    currentLogId = newLog.id
+                    tags = newLog.tags // Update tags after successful save
+                    displayText = newLog.displayContent() // Update display text
+                    print("New log created with ID: \(String(describing: newLog.id)) and \(tags.count) tags")
+                    isEditing = false
+                } else {
+                    saveError = "Failed to create new log. Please try again."
+                    print("Failed to create new log")
+                }
+            }
+        } catch {
+            saveError = "Failed to sync with server: \(error.localizedDescription)"
+            print("Error saving log: \(error)")
         }
-        isEditing = false
     }
     
     func createNewEntry() {
@@ -53,7 +79,12 @@ class LogViewModel: ObservableObject {
         text = ""
         displayText = ""
         tags = []
+        saveError = nil
         isEditing = true
+    }
+    
+    func clearError() {
+        saveError = nil
     }
 }
 
@@ -68,6 +99,26 @@ struct MainView: View {
     
     var body: some View {
         VStack(spacing: 0) {
+            // Error message display
+            if let error = viewModel.saveError {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Dismiss") {
+                        viewModel.clearError()
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(8)
+                .padding(.horizontal)
+            }
+            
             // Tags display
             if !viewModel.isEditing && !viewModel.tags.isEmpty {
                 TagsView(tags: viewModel.tags, fontSize: .caption2)
@@ -106,35 +157,36 @@ struct MainView: View {
             HStack {
                 if viewModel.currentLogId != nil && !viewModel.isEditing {
                     Button(action: viewModel.createNewEntry) {
-                        Text("New Entry")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.secondary)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
+                        Label("New Entry", systemImage: "plus")
                     }
-                    .buttonStyle(.borderless)
-                    .padding()
+                    .buttonStyle(.borderedProminent)
+                    .tint(.secondary)
                 }
                 
                 Button(action: {
                     if !viewModel.isEditing {
                         viewModel.isEditing = true
+                        viewModel.clearError()
                     } else {
-                        viewModel.saveLog()
+                        Task {
+                            await viewModel.saveLog()
+                        }
                     }
                 }) {
-                    Text(viewModel.isEditing ? "Save" : "Edit")
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.accentColor)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
+                    if viewModel.isSaving {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                    } else {
+                        Label(viewModel.isEditing ? "Save" : "Edit", 
+                              systemImage: viewModel.isEditing ? "checkmark" : "pencil")
+                    }
                 }
-                .buttonStyle(.borderless)
-                .padding()
+                .buttonStyle(.borderedProminent)
+                .tint(.accentColor)
+                .disabled(viewModel.isSaving)
                 .keyboardShortcut(.return, modifiers: .command)
             }
+            .padding()
         }
         .onAppear {
             if let logId = windowController.currentLogId {

@@ -5,9 +5,11 @@
 //  Created by Raffy Castillo on 7/21/25.
 //
 
+import Foundation
 import CoreData
 import SwiftUI
 import os
+import OSLog
 
 // Define window types that can be switched between
 enum WindowType: String {
@@ -54,11 +56,110 @@ class WindowStateController: ObservableObject {
 }
 
 // Data State Controller 
+@MainActor
 class DataController: ObservableObject {
-    let container: NSPersistentContainer  // same shared container
+    let container: NSPersistentContainer
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Reflective", category: "DataController")
+    private let apiClient = APIClient.shared
+    private var syncTask: Task<Void, Never>?
     
-    // Data-specific operations
+    @Published private(set) var isSyncing = false
+    @Published private(set) var lastSyncError: String?
+    
+    init(container: NSPersistentContainer) {
+        self.container = container
+        startPeriodicSync()
+    }
+    
+    deinit {
+        syncTask?.cancel()
+    }
+    
+    // MARK: - Periodic Sync
+    private func startPeriodicSync() {
+        syncTask = Task {
+            while !Task.isCancelled {
+                await syncWithBackend()
+                try? await Task.sleep(nanoseconds: 5 * 60 * 1_000_000_000) // 5 minutes
+            }
+        }
+    }
+    
+    // MARK: - Data Synchronization
+    func syncWithBackend() async {
+        guard !isSyncing else { return }
+        isSyncing = true
+        lastSyncError = nil
+        
+        do {
+            // Fetch all logs from backend
+            let remoteLogs = try await apiClient.fetchLogs()
+            
+            // Sync each log
+            for remoteLog in remoteLogs {
+                let fetchRequest = NSFetchRequest<Log>(entityName: "Log")
+                fetchRequest.predicate = NSPredicate(format: "id == %@", remoteLog.id as CVarArg)
+                
+                let existingLogs = try container.viewContext.fetch(fetchRequest)
+                
+                if let existingLog = existingLogs.first {
+                    // Update existing log if remote is newer
+                    if remoteLog.updatedAt > existingLog.wrappedUpdatedAt {
+                        existingLog.content = remoteLog.content
+                        existingLog.updatedAt = remoteLog.updatedAt
+                        existingLog.processingStatus = remoteLog.processingStatus
+                        existingLog.wordCount = remoteLog.wordCount
+                    }
+                } else {
+                    // Create new log
+                    let newLog = Log(context: container.viewContext)
+                    newLog.id = remoteLog.id
+                    newLog.content = remoteLog.content
+                    newLog.createdAt = remoteLog.createdAt
+                    newLog.updatedAt = remoteLog.updatedAt
+                    newLog.processingStatus = remoteLog.processingStatus
+                    newLog.wordCount = remoteLog.wordCount
+                }
+            }
+            
+            // Fetch all tags from backend
+            let remoteTags = try await apiClient.fetchTags()
+            
+            // Sync each tag
+            for remoteTag in remoteTags {
+                let fetchRequest = NSFetchRequest<Tag>(entityName: "Tag")
+                fetchRequest.predicate = NSPredicate(format: "id == %@", remoteTag.id as CVarArg)
+                
+                let existingTags = try container.viewContext.fetch(fetchRequest)
+                
+                if let existingTag = existingTags.first {
+                    // Update existing tag
+                    existingTag.name = remoteTag.name
+                    existingTag.color = remoteTag.color
+                } else {
+                    // Create new tag
+                    let newTag = Tag(context: container.viewContext)
+                    newTag.id = remoteTag.id
+                    newTag.name = remoteTag.name
+                    newTag.color = remoteTag.color
+                    newTag.createdAt = remoteTag.createdAt
+                }
+            }
+            
+            // Save changes
+            try container.viewContext.save()
+            logger.debug("Successfully synced with backend")
+            
+        } catch {
+            lastSyncError = error.localizedDescription
+            logger.error("Error syncing with backend: \(error.localizedDescription)")
+            print("Error syncing with backend: \(error)")
+        }
+        
+        isSyncing = false
+    }
+    
+    // MARK: - Data Operations
     func saveData() {
         let context = container.viewContext
         if context.hasChanges {
@@ -87,97 +188,56 @@ class DataController: ObservableObject {
         }
     }
     
-    init(container: NSPersistentContainer) {
-        self.container = container
+    // MARK: - Search Operations
+    func performSearch(query: String) async throws -> [QueryResult] {
+        // Create Query object
+        let queryObj = Query.create(queryText: query, in: container.viewContext)
         
-        // Configure autosave
-        configureAutosave()
-        
-        #if DEBUG
-        // Add observer for Core Data debug notifications
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(contextObjectsDidChange),
-            name: NSManagedObjectContext.didChangeObjectsNotification,
-            object: container.viewContext
-        )
-        #endif
-        
-        // Register for app termination notification
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(saveOnTerminate),
-            name: NSApplication.willTerminateNotification,
-            object: nil
-        )
-        
-        // Register for app resign active notification
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(saveOnResignActive),
-            name: NSApplication.willResignActiveNotification,
-            object: nil
-        )
-        
-        // Register for context did save notification
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(contextDidSave),
-            name: .NSManagedObjectContextDidSave,
-            object: nil
-        )
-    }
-    
-    private func configureAutosave() {
-        // Configure context to automatically merge changes
-        container.viewContext.automaticallyMergesChangesFromParent = true
-        
-        // Configure context to merge policy
-        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-        
-        // Set up autosave timer
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if self.container.viewContext.hasChanges {
-                self.logger.debug("Autosaving changes")
-                self.saveData()
+        do {
+            // Perform search on backend
+            let searchResponse = try await apiClient.performSearch(query: query)
+            
+            // Create QueryResults
+            var results: [QueryResult] = []
+            for (index, result) in searchResponse.results.enumerated() {
+                // Find corresponding Log
+                let logFetch = NSFetchRequest<Log>(entityName: "Log")
+                logFetch.predicate = NSPredicate(format: "id == %@", result.logId as CVarArg)
+                
+                guard let log = try container.viewContext.fetch(logFetch).first else {
+                    continue
+                }
+                
+                let queryResult = QueryResult.create(
+                    query: queryObj,
+                    log: log,
+                    relevanceScore: result.relevanceScore,
+                    snippetText: result.snippetText,
+                    snippetStartIndex: result.snippetStartIndex,
+                    snippetEndIndex: result.snippetEndIndex,
+                    rank: Int32(index),
+                    contextBefore: result.contextBefore,
+                    contextAfter: result.contextAfter,
+                    in: container.viewContext
+                )
+                
+                results.append(queryResult)
             }
+            
+            // Update query metadata
+            queryObj.executionTime = searchResponse.executionTime
+            queryObj.resultCount = Int32(results.count)
+            
+            // Save context
+            try container.viewContext.save()
+            
+            return results
+            
+        } catch {
+            // Clean up query object if search failed
+            container.viewContext.delete(queryObj)
+            try? container.viewContext.save()
+            throw error
         }
     }
-    
-    @objc private func saveOnTerminate() {
-        logger.debug("Application terminating, saving context")
-        saveData()
-    }
-    
-    @objc private func saveOnResignActive() {
-        logger.debug("Application resigning active, saving context")
-        saveData()
-    }
-    
-    @objc private func contextDidSave(_ notification: Notification) {
-        // Only process notifications from other contexts
-        if notification.object as? NSManagedObjectContext != container.viewContext {
-            logger.debug("Background context saved, merging changes to main context")
-            container.viewContext.perform {
-                self.container.viewContext.mergeChanges(fromContextDidSave: notification)
-            }
-        }
-    }
-    
-    #if DEBUG
-    @objc private func contextObjectsDidChange(_ notification: Notification) {
-        guard let userInfo = notification.userInfo else { return }
-        
-        if let inserts = userInfo[NSInsertedObjectsKey] as? Set<NSManagedObject>, !inserts.isEmpty {
-            logger.debug("Inserted objects: \(inserts.count)")
-        }
-        if let updates = userInfo[NSUpdatedObjectsKey] as? Set<NSManagedObject>, !updates.isEmpty {
-            logger.debug("Updated objects: \(updates.count)")
-        }
-        if let deletes = userInfo[NSDeletedObjectsKey] as? Set<NSManagedObject>, !deletes.isEmpty {
-            logger.debug("Deleted objects: \(deletes.count)")
-        }
-    }
-    #endif
 }

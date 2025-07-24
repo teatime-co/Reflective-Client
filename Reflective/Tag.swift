@@ -23,11 +23,11 @@ extension Tag {
         return .blue
     }
     
-    // Static method to create a new tag or retrieve existing
-    static func getOrCreate(name: String, in context: NSManagedObjectContext) -> Tag {
+    // MARK: - Static method to create a new tag or retrieve existing
+    static func findOrCreate(name: String, in context: NSManagedObjectContext) -> Tag {
         // Check if tag already exists
         let request = NSFetchRequest<Tag>(entityName: "Tag")
-        request.predicate = NSPredicate(format: "name == %@", name)
+        request.predicate = NSPredicate(format: "name ==[cd] %@", name)
         
         if let existingTag = try? context.fetch(request).first {
             return existingTag
@@ -36,39 +36,59 @@ extension Tag {
         // Create new tag if it doesn't exist
         let tag = Tag(context: context)
         tag.id = UUID()
-        tag.name = name
+        tag.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         tag.createdAt = Date()
         tag.color = Color.random().toHex()
         return tag
     }
     
-    // Associate tag with a log
-    func associateWithLog(_ log: Log, in context: NSManagedObjectContext) {
-        // Check if association already exists
-        let request = NSFetchRequest<TagLog>(entityName: "TagLog")
-        request.predicate = NSPredicate(format: "tag == %@ AND log == %@", self, log)
+    // MARK: - Batch creation with uniqueness checking
+    static func findOrCreateMultiple(names: [String], in context: NSManagedObjectContext) -> [Tag] {
+        // Normalize and deduplicate names
+        let normalizedNames = Set(names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .filter { !$0.isEmpty }
         
-        if let _ = try? context.fetch(request).first {
-            // Association already exists
-            return
+        // Create array to store all tags
+        var tags: [Tag] = []
+        
+        // Process each name
+        for name in normalizedNames {
+            tags.append(findOrCreate(name: name, in: context))
         }
         
-        // Create new association
-        let tagLog = TagLog(context: context)
-        tagLog.tag = self
-        tagLog.log = log
-        tagLog.createdAt = Date()
+        return tags
     }
     
-    // Fetch all tags
+    // MARK: - Computed property for associated logs
+    var logs: [Log] {
+        let set = self.tagLog ?? []
+        let tagAssociationsSet = set as? Set<TagLog> ?? []
+        return tagAssociationsSet.compactMap { $0.log }
+    }
+    
+    // MARK: - Associate tag with a log
+    func associateWithLog(_ log: Log, in context: NSManagedObjectContext) {
+        // Use the robust TagLog.findOrCreate method
+        _ = TagLog.findOrCreate(tag: self, log: log, in: context)
+    }
+    
+    // MARK: - Fetch all tags
     static var allTags: NSFetchRequest<Tag> {
         let request = NSFetchRequest<Tag>(entityName: "Tag")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
         return request
     }
+    
+    // MARK: - Search tags by name pattern
+    static func tags(matchingPattern pattern: String) -> NSFetchRequest<Tag> {
+        let request = NSFetchRequest<Tag>(entityName: "Tag")
+        request.predicate = NSPredicate(format: "name CONTAINS[cd] %@", pattern)
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Tag.name, ascending: true)]
+        return request
+    }
 }
 
-// Helper extension for Color to generate random colors and convert to/from hex
+// MARK: - Helper extension for Color to generate random colors and convert to/from hex
 extension Color {
     static func random() -> Color {
         Color(
