@@ -19,6 +19,11 @@ enum WindowType: String {
     case progress
 }
 
+// User Defaults Keys
+enum UserDefaultsKeys {
+    static let serverOnlyMode = "serverOnlyMode"
+}
+
 // Window State Controller
 class WindowStateController: ObservableObject {
     let container: NSPersistentContainer  // shared container
@@ -65,6 +70,15 @@ class DataController: ObservableObject {
     
     @Published private(set) var isSyncing = false
     @Published private(set) var lastSyncError: String?
+    private var _isServerOnlyMode: Bool = APIClient.isServerOnlyMode
+    var isServerOnlyMode: Bool {
+        get { _isServerOnlyMode }
+        set {
+            objectWillChange.send()
+            _isServerOnlyMode = newValue
+            APIClient.isServerOnlyMode = newValue
+        }
+    }
     
     init(container: NSPersistentContainer) {
         self.container = container
@@ -85,84 +99,10 @@ class DataController: ObservableObject {
         }
     }
     
-    // MARK: - Data Synchronization
-    func syncWithBackend() async {
-        guard !isSyncing else { return }
-        isSyncing = true
-        lastSyncError = nil
-        
-        do {
-            // Fetch all logs from backend
-            let remoteLogs = try await apiClient.fetchLogs()
-            
-            // Sync each log
-            for remoteLog in remoteLogs {
-                let fetchRequest = NSFetchRequest<Log>(entityName: "Log")
-                fetchRequest.predicate = NSPredicate(format: "id == %@", remoteLog.id as CVarArg)
-                
-                let existingLogs = try container.viewContext.fetch(fetchRequest)
-                
-                if let existingLog = existingLogs.first {
-                    // Update existing log if remote is newer
-                    if remoteLog.updatedAt > existingLog.wrappedUpdatedAt {
-                        existingLog.content = remoteLog.content
-                        existingLog.updatedAt = remoteLog.updatedAt
-                        existingLog.processingStatus = remoteLog.processingStatus
-                        existingLog.wordCount = remoteLog.wordCount
-                    }
-                } else {
-                    // Create new log
-                    let newLog = Log(context: container.viewContext)
-                    newLog.id = remoteLog.id
-                    newLog.content = remoteLog.content
-                    newLog.createdAt = remoteLog.createdAt
-                    newLog.updatedAt = remoteLog.updatedAt
-                    newLog.processingStatus = remoteLog.processingStatus
-                    newLog.wordCount = remoteLog.wordCount
-                }
-            }
-            
-            // Fetch all tags from backend
-            let remoteTags = try await apiClient.fetchTags()
-            
-            // Sync each tag
-            for remoteTag in remoteTags {
-                let fetchRequest = NSFetchRequest<Tag>(entityName: "Tag")
-                fetchRequest.predicate = NSPredicate(format: "id == %@", remoteTag.id as CVarArg)
-                
-                let existingTags = try container.viewContext.fetch(fetchRequest)
-                
-                if let existingTag = existingTags.first {
-                    // Update existing tag
-                    existingTag.name = remoteTag.name
-                    existingTag.color = remoteTag.color
-                } else {
-                    // Create new tag
-                    let newTag = Tag(context: container.viewContext)
-                    newTag.id = remoteTag.id
-                    newTag.name = remoteTag.name
-                    newTag.color = remoteTag.color
-                    newTag.createdAt = remoteTag.createdAt
-                }
-            }
-            
-            // Save changes
-            try container.viewContext.save()
-            logger.debug("Successfully synced with backend")
-            
-        } catch {
-            lastSyncError = error.localizedDescription
-            logger.error("Error syncing with backend: \(error.localizedDescription)")
-            print("Error syncing with backend: \(error)")
-        }
-        
-        isSyncing = false
-    }
-    
     // MARK: - Data Operations
     func saveData() {
         let context = container.viewContext
-        if context.hasChanges {
+        if context.hasChanges && !isServerOnlyMode {
             do {
                 try context.save()
                 logger.debug("Successfully saved Core Data context")
@@ -174,6 +114,11 @@ class DataController: ObservableObject {
     }
     
     func fetchData<T: NSManagedObject>(_ type: T.Type, predicate: NSPredicate? = nil) -> [T] {
+        if isServerOnlyMode {
+            // In server-only mode, don't fetch from Core Data
+            return []
+        }
+        
         let request = T.fetchRequest() as! NSFetchRequest<T>
         request.predicate = predicate
         
@@ -239,5 +184,82 @@ class DataController: ObservableObject {
             try? container.viewContext.save()
             throw error
         }
+    }
+    
+    // MARK: - Data Synchronization
+    func syncWithBackend() async {
+        guard !isSyncing else { return }
+        isSyncing = true
+        lastSyncError = nil
+        
+        do {
+            // Fetch all logs from backend
+            let remoteLogs = try await apiClient.fetchLogs()
+            
+            // Keep existing objects in memory but don't save to disk in server-only mode
+            for remoteLog in remoteLogs {
+                let fetchRequest = NSFetchRequest<Log>(entityName: "Log")
+                fetchRequest.predicate = NSPredicate(format: "id == %@", remoteLog.id as CVarArg)
+                
+                let existingLogs = try container.viewContext.fetch(fetchRequest)
+                
+                if let existingLog = existingLogs.first {
+                    // Update existing log if remote is newer
+                    if remoteLog.updatedAt > existingLog.wrappedUpdatedAt {
+                        existingLog.content = remoteLog.content
+                        existingLog.updatedAt = remoteLog.updatedAt
+                        existingLog.wordCount = remoteLog.wordCount
+                    }
+                } else {
+                    // Create new log
+                    let newLog = Log(context: container.viewContext)
+                    newLog.id = remoteLog.id
+                    newLog.content = remoteLog.content
+                    newLog.createdAt = remoteLog.createdAt
+                    newLog.updatedAt = remoteLog.updatedAt
+                    newLog.wordCount = remoteLog.wordCount
+                }
+            }
+            
+            // Only save to disk if not in server-only mode
+            if !isServerOnlyMode {
+                try container.viewContext.save()
+            }
+            
+            // Fetch all tags from backend
+            let remoteTags = try await apiClient.fetchTags()
+            
+            // Sync each tag
+            for remoteTag in remoteTags {
+                let fetchRequest = NSFetchRequest<Tag>(entityName: "Tag")
+                fetchRequest.predicate = NSPredicate(format: "id == %@", remoteTag.id as CVarArg)
+                
+                let existingTags = try container.viewContext.fetch(fetchRequest)
+                
+                if let existingTag = existingTags.first {
+                    // Update existing tag if needed
+                    existingTag.name = remoteTag.name
+                    existingTag.color = remoteTag.color
+                } else {
+                    // Create new tag
+                    let newTag = Tag(context: container.viewContext)
+                    newTag.id = remoteTag.id
+                    newTag.name = remoteTag.name
+                    newTag.color = remoteTag.color
+                    newTag.createdAt = remoteTag.createdAt
+                }
+            }
+            
+            // Only save to disk if not in server-only mode
+            if !isServerOnlyMode {
+                try container.viewContext.save()
+            }
+            
+        } catch {
+            lastSyncError = error.localizedDescription
+            print("Error syncing with backend: \(error)")
+        }
+        
+        isSyncing = false
     }
 }

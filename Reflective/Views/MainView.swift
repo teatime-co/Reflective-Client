@@ -5,6 +5,7 @@ import CoreData
 @MainActor
 class LogViewModel: ObservableObject {
     private let dataController: DataController
+    private let apiClient = APIClient.shared
     
     @Published var currentLogId: UUID?
     @Published var text: String = ""
@@ -13,24 +14,114 @@ class LogViewModel: ObservableObject {
     @Published var tags: [Tag] = []
     @Published var saveError: String?
     @Published var isSaving: Bool = false
+    @Published var isLoading: Bool = false
     
     init(dataController: DataController) {
         self.dataController = dataController
     }
     
-    func loadLogIfNeeded() {
-        print("loadLogIfNeeded called with ID: \(String(describing: currentLogId))")
-        guard let id = currentLogId,
-              let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first else {
-            print("No log found or ID is nil")
+    func loadLogIfNeeded() async {
+        guard let id = currentLogId else {
+            print("No log ID provided")
             return
         }
-        print("Log found, updating text")
-        text = log.content ?? ""
-        displayText = log.displayContent()
-        tags = log.tags
-        isEditing = false
-        saveError = nil
+        
+        isLoading = true
+        defer { isLoading = false }
+        
+        print("loadLogIfNeeded called with ID: \(String(describing: id))")
+        
+        if dataController.isServerOnlyMode {
+            do {
+                // Fetch from server and update/create in memory
+                let serverLogs = try await apiClient.fetchLogs()
+                if let matchingLog = serverLogs.first(where: { $0.id == id }) {
+                    // Use the same context but don't save
+                    let context = dataController.container.viewContext
+                    
+                    // Find or create log
+                    let fetchRequest = NSFetchRequest<Log>(entityName: "Log")
+                    fetchRequest.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+                    let existingLogs = try context.fetch(fetchRequest)
+                    
+                    let log: Log
+                    if let existingLog = existingLogs.first {
+                        log = existingLog
+                        // Update properties
+                        log.content = matchingLog.content
+                        log.updatedAt = matchingLog.updatedAt
+                        log.wordCount = matchingLog.wordCount
+                        log.processingStatus = matchingLog.processingStatus
+                    } else {
+                        log = Log(context: context)
+                        log.id = matchingLog.id
+                        log.content = matchingLog.content
+                        log.createdAt = matchingLog.createdAt
+                        log.updatedAt = matchingLog.updatedAt
+                        log.wordCount = matchingLog.wordCount
+                        log.processingStatus = matchingLog.processingStatus
+                    }
+                    
+                    // Update tags
+                    // First remove existing tags
+                    if let existingTagLogs = log.tagLog as? Set<TagLog> {
+                        for tagLog in existingTagLogs {
+                            context.delete(tagLog)
+                        }
+                    }
+                    
+                    // Add new tags
+                    for tagPayload in matchingLog.tags {
+                        // Find or create tag
+                        let tagFetch = NSFetchRequest<Tag>(entityName: "Tag")
+                        tagFetch.predicate = NSPredicate(format: "id == %@", tagPayload.id as CVarArg)
+                        let existingTags = try context.fetch(tagFetch)
+                        
+                        let tag: Tag
+                        if let existingTag = existingTags.first {
+                            tag = existingTag
+                        } else {
+                            tag = Tag(context: context)
+                            tag.id = tagPayload.id
+                            tag.name = tagPayload.name
+                            tag.color = tagPayload.color
+                            tag.createdAt = tagPayload.createdAt
+                        }
+                        
+                        let tagLog = TagLog(context: context)
+                        tagLog.tag = tag
+                        tagLog.log = log
+                        tagLog.createdAt = Date()
+                    }
+                    
+                    // Update view model
+                    text = log.content ?? ""
+                    displayText = log.displayContent()
+                    tags = log.tags
+                    isEditing = false
+                    saveError = nil
+                    
+                    print("Successfully loaded log with \(tags.count) tags")
+                } else {
+                    print("No log found on server with ID: \(id)")
+                }
+            } catch {
+                print("Error fetching log from server: \(error)")
+                saveError = "Failed to load log from server: \(error.localizedDescription)"
+            }
+        } else {
+            // Original Core Data fetching logic
+            if let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first {
+                print("Log found in Core Data")
+                text = log.content ?? ""
+                displayText = log.displayContent()
+                tags = log.tags
+                isEditing = false
+                saveError = nil
+            } else {
+                print("No log found in Core Data with ID: \(id)")
+            }
+        }
     }
     
     func saveLog() async {
@@ -40,34 +131,57 @@ class LogViewModel: ObservableObject {
         defer { isSaving = false }
         
         do {
+            let context = dataController.container.viewContext
+            
+            // Find or create log
+            let log: Log
             if let id = currentLogId,
-               let log = dataController.fetchData(Log.self, predicate: NSPredicate(format: "id == %@", id as CVarArg)).first {
+               let existingLog = try await context.perform({
+                   try context.fetch(NSFetchRequest<Log>(entityName: "Log")).first(where: { $0.id == id })
+               }) {
+                log = existingLog
                 print("Updating existing log: \(id)")
-                
-                let success = try await log.update(content: text, in: dataController.container.viewContext)
-                if success {
-                    tags = log.tags // Update tags after successful save
-                    displayText = log.displayContent() // Update display text
-                    print("Successfully updated log with \(tags.count) tags")
-                    isEditing = false
-                } else {
-                    saveError = "Failed to update log. Please try again."
-                    print("Failed to update log")
-                }
             } else {
+                log = Log(context: context)
+                log.id = UUID()
+                log.createdAt = Date()
                 print("Creating new log")
-                
-                if let newLog = try await Log.create(content: text, in: dataController.container.viewContext) {
-                    currentLogId = newLog.id
-                    tags = newLog.tags // Update tags after successful save
-                    displayText = newLog.displayContent() // Update display text
-                    print("New log created with ID: \(String(describing: newLog.id)) and \(tags.count) tags")
-                    isEditing = false
-                } else {
-                    saveError = "Failed to create new log. Please try again."
-                    print("Failed to create new log")
-                }
             }
+            
+            // Update log properties
+            log.content = text
+            log.updatedAt = Date()
+            log.wordCount = Int32(text.split(separator: " ").count)
+            log.processingStatus = "pending"
+            
+            // Process tags
+            let success = log.processTags(in: context)
+            if !success {
+                print("Warning: Tag processing failed")
+            }
+            
+            // Send to server
+            if let id = currentLogId {
+                // Update existing log
+                try await apiClient.updateLog(log)
+            } else {
+                // Create new log
+                try await apiClient.createLog(log)
+            }
+            
+            // Update view model with the log's data
+            currentLogId = log.id
+            text = log.content ?? ""
+            displayText = log.displayContent()
+            tags = log.tags
+            isEditing = false
+            
+            // Only save context if not in server-only mode
+            if !dataController.isServerOnlyMode {
+                try context.save()
+            }
+            
+            print("Successfully saved log with ID: \(log.id?.uuidString ?? "unknown") and \(tags.count) tags")
         } catch {
             saveError = "Failed to sync with server: \(error.localizedDescription)"
             print("Error saving log: \(error)")
@@ -93,13 +207,15 @@ struct MainView: View {
     @StateObject var viewModel: LogViewModel
     @Environment(\.colorScheme) var colorScheme
     @State private var savingDotsState = 0
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
     init(dataController: DataController) {
         _viewModel = StateObject(wrappedValue: LogViewModel(dataController: dataController))
     }
     
     private var savingText: String {
-        "Saving" + String(repeating: ".", count: savingDotsState + 1)
+        let dots = [".", "..", "..."][savingDotsState]
+        return "Saving" + dots
     }
     
     var body: some View {
@@ -130,7 +246,15 @@ struct MainView: View {
                     .frame(height: 40)
             }
             
-            if viewModel.isEditing {
+            if viewModel.isLoading {
+                HStack {
+                    Spacer()
+                    Text("Loading...")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.isEditing {
                 TextEditor(text: $viewModel.text)
                     .scrollContentBackground(.hidden)
                     .background(.clear)
@@ -168,39 +292,33 @@ struct MainView: View {
                     .tint(.secondary)
                 }
                 
-                if viewModel.isSaving {
-                    Text(savingText)
-                        .foregroundStyle(.secondary)
-                        .onAppear {
-                            // Start the timer when saving begins
-                            let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-                                savingDotsState = (savingDotsState + 1) % 3
-                                // Stop the timer when saving is complete
-                                if !viewModel.isSaving {
-                                    timer.invalidate()
-                                    savingDotsState = 0
-                                }
-                            }
-                            // Make sure the timer stops if the view disappears
-                            RunLoop.current.add(timer, forMode: .common)
+                Button(action: {
+                    if !viewModel.isEditing {
+                        viewModel.isEditing = true
+                        viewModel.clearError()
+                    } else {
+                        Task {
+                            await viewModel.saveLog()
                         }
-                } else {
-                    Button(action: {
-                        if !viewModel.isEditing {
-                            viewModel.isEditing = true
-                            viewModel.clearError()
-                        } else {
-                            Task {
-                                await viewModel.saveLog()
-                            }
-                        }
-                    }) {
-                        Label(viewModel.isEditing ? "Save" : "Edit", 
-                              systemImage: viewModel.isEditing ? "checkmark" : "pencil")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.accentColor)
-                    .keyboardShortcut(.return, modifiers: .command)
+                }) {
+                    Label(viewModel.isEditing ? "Save" : "Edit", 
+                          systemImage: viewModel.isEditing ? "checkmark" : "pencil")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.accentColor)
+                .disabled(viewModel.isSaving || viewModel.isLoading)
+                .keyboardShortcut(.return, modifiers: .command)
+            }
+            .overlay {
+                if viewModel.isSaving {
+                    HStack {
+                        Spacer()
+                        Text(savingText)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .background(.background.opacity(0.8))
                 }
             }
             .padding()
@@ -208,12 +326,21 @@ struct MainView: View {
         .onAppear {
             if let logId = windowController.currentLogId {
                 viewModel.currentLogId = logId
-                viewModel.loadLogIfNeeded()
+                Task {
+                    await viewModel.loadLogIfNeeded()
+                }
             }
         }
         .onChange(of: windowController.currentLogId) { oldValue, newValue in
             viewModel.currentLogId = newValue
-            viewModel.loadLogIfNeeded()
+            Task {
+                await viewModel.loadLogIfNeeded()
+            }
+        }
+        .onReceive(timer) { _ in
+            if viewModel.isSaving {
+                savingDotsState = (savingDotsState + 1) % 3
+            }
         }
     }
 }

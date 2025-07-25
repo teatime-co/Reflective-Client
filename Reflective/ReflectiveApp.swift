@@ -61,6 +61,8 @@ struct ReflectiveApp: App {
 
         // Create controllers in correct order
         dataController = DataController(container: container)
+        // Configure to use only server data or both server+local
+        APIClient.isServerOnlyMode = true  // Set to false to use both Core Data and server
         windowController = WindowStateController(container: container)
     }
     

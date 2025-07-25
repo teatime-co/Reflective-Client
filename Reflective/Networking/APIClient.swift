@@ -11,8 +11,15 @@ class APIClient {
     static let shared = APIClient()
     private let baseURL: String
     
-    // Development flag to bypass backend sync
-    static var bypassBackendSync = false
+    // Storage mode configuration
+    static var isServerOnlyMode: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: UserDefaultsKeys.serverOnlyMode)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.serverOnlyMode)
+        }
+    }
     
     // Configured JSON decoder/encoder for dates
     private let jsonDecoder: JSONDecoder = {
@@ -49,19 +56,6 @@ class APIClient {
     
     // MARK: - Log Endpoints
     func createLog(_ log: Log) async throws -> LogPayload {
-        // Skip backend sync if bypass is enabled
-        if APIClient.bypassBackendSync {
-            print("[DEV] Bypassing backend sync for createLog")
-            return LogPayload(
-                id: log.wrappedId,
-                content: log.wrappedContent,
-                createdAt: log.wrappedCreatedAt,
-                updatedAt: log.wrappedUpdatedAt,
-                wordCount: log.wordCount,
-                processingStatus: log.processingStatus ?? "pending"
-            )
-        }
-        
         let url = URL(string: "\(baseURL)/logs")!
         print("[DEBUG] Creating log with URL: \(url.absoluteString)")
         
@@ -69,13 +63,24 @@ class APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        // Convert tags to TagPayload array
+        let tagPayloads = log.tags.map { tag in
+            TagPayload(
+                id: tag.wrappedId,
+                name: tag.wrappedName,
+                color: tag.color,
+                createdAt: tag.wrappedCreatedAt
+            )
+        }
+        
         let payload = LogPayload(
             id: log.wrappedId,  // Send client-generated ID to server
             content: log.wrappedContent,
             createdAt: log.wrappedCreatedAt,
             updatedAt: log.wrappedUpdatedAt,
             wordCount: log.wordCount,
-            processingStatus: log.processingStatus ?? "pending"
+            processingStatus: log.processingStatus ?? "pending",
+            tags: tagPayloads
         )
         
         do {
@@ -108,16 +113,20 @@ class APIClient {
     }
     
     func updateLog(_ log: Log) async throws {
-        // Skip backend sync if bypass is enabled
-        if APIClient.bypassBackendSync {
-            print("[DEV] Bypassing backend sync for updateLog")
-            return
-        }
-        
         let url = URL(string: "\(baseURL)/logs/\(log.wrappedId)")!
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Convert tags to TagPayload array
+        let tagPayloads = log.tags.map { tag in
+            TagPayload(
+                id: tag.wrappedId,
+                name: tag.wrappedName,
+                color: tag.color,
+                createdAt: tag.wrappedCreatedAt
+            )
+        }
         
         let payload = LogPayload(
             id: log.wrappedId,
@@ -125,7 +134,8 @@ class APIClient {
             createdAt: log.wrappedCreatedAt,
             updatedAt: log.wrappedUpdatedAt,
             wordCount: log.wordCount,
-            processingStatus: log.processingStatus ?? "pending"
+            processingStatus: log.processingStatus ?? "pending",
+            tags: tagPayloads
         )
         
         request.httpBody = try jsonEncoder.encode(payload)
@@ -138,12 +148,6 @@ class APIClient {
     }
     
     func deleteLog(_ logId: UUID) async throws {
-        // Skip backend sync if bypass is enabled
-        if APIClient.bypassBackendSync {
-            print("[DEV] Bypassing backend sync for deleteLog")
-            return
-        }
-        
         let url = URL(string: "\(baseURL)/logs/\(logId)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
@@ -156,12 +160,6 @@ class APIClient {
     }
     
     func fetchLogs() async throws -> [LogPayload] {
-        // Return empty array if bypass is enabled
-        if APIClient.bypassBackendSync {
-            print("[DEV] Bypassing backend sync for fetchLogs")
-            return []
-        }
-        
         let url = URL(string: "\(baseURL)/logs")!
         let (data, response) = try await URLSession.shared.data(from: url)
         
@@ -175,12 +173,6 @@ class APIClient {
     
     // MARK: - Tag Endpoints
     func createTag(_ tag: Tag) async throws {
-        // Skip backend sync if bypass is enabled
-        if APIClient.bypassBackendSync {
-            print("[DEV] Bypassing backend sync for createTag")
-            return
-        }
-        
         let url = URL(string: "\(baseURL)/tags")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -203,12 +195,6 @@ class APIClient {
     }
     
     func fetchTags() async throws -> [TagPayload] {
-        // Return empty array if bypass is enabled
-        if APIClient.bypassBackendSync {
-            print("[DEV] Bypassing backend sync for fetchTags")
-            return []
-        }
-        
         let url = URL(string: "\(baseURL)/tags")!
         let (data, response) = try await URLSession.shared.data(from: url)
         
@@ -222,12 +208,6 @@ class APIClient {
     
     // MARK: - Query Endpoints
     func performSearch(query: String) async throws -> SearchResponse {
-        // Return empty search response if bypass is enabled
-        if APIClient.bypassBackendSync {
-            print("[DEV] Bypassing backend sync for search")
-            return SearchResponse(query: query, results: [], executionTime: 0)
-        }
-        
         let url = URL(string: "\(baseURL)/search")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -254,6 +234,7 @@ struct LogPayload: Codable {
     let updatedAt: Date
     let wordCount: Int32
     let processingStatus: String
+    let tags: [TagPayload]
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -262,6 +243,7 @@ struct LogPayload: Codable {
         case updatedAt = "updated_at"
         case wordCount = "word_count"
         case processingStatus = "processing_status"
+        case tags
     }
 }
 
